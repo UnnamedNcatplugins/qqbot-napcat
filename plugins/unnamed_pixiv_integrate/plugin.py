@@ -1,14 +1,16 @@
-import os.path
 import asyncio
 from ncatbot.plugin_system import NcatBotPlugin, command_registry, group_filter, param
+from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
 from ncatbot.utils import get_log
-from ncatbot.core.event import GroupMessageEvent, BaseMessageEvent
+from ncatbot.core.event import GroupMessageEvent
 from dataclasses import dataclass, fields, asdict, is_dataclass, field, MISSING
 from typing import Optional
 from .better_pixiv import BetterPixiv
 from pathlib import Path
 
 logger = get_log("UnnamedPixivIntegrate")
+enable_group_filter = False
+filter_groups = []
 
 
 # noinspection PyDataclass,PyArgumentList
@@ -61,6 +63,15 @@ class PixivConfig:
     refresh_token: str = field(default='')
     proxy_server: str = field(default='')
     max_single_work_cnt: int = field(default=20)
+    enable_group_filter: bool = field(default=False)
+    filter_group: list[int] = field(default_factory=list)
+
+
+@filter_registry.register('group_filter')
+def filter_group_by_config(event: GroupMessageEvent) -> bool:
+    if enable_group_filter:
+        return int(event.group_id) in filter_groups
+    return True
 
 
 class UnnamedPixivIntegrate(NcatBotPlugin):
@@ -87,9 +98,11 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         self.pixiv_api = BetterPixiv(proxy=self.pixiv_config.proxy_server if self.pixiv_config.proxy_server else None,
                                      logger=get_log('pixiv'))
         await self.pixiv_api.api_login(refresh_token=self.pixiv_config.refresh_token)
-        await self.pixiv_api.get_work_details(115081727)
-        cur_loop = asyncio.get_running_loop()
-        logger.debug(f'on_load使用的loop: {cur_loop}, id: {id(cur_loop)}')
+        if self.pixiv_config.enable_group_filter:
+            logger.info(f'启用指定群聊过滤: {self.pixiv_config.filter_group}')
+            global enable_group_filter, filter_groups
+            enable_group_filter = True
+            filter_groups += self.pixiv_config.filter_group
         await super().on_load()
 
     async def on_close(self) -> None:
@@ -98,6 +111,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         await super().on_close()
 
     @group_filter
+    @filter_registry.filters('group_filter')
     @command_registry.command('pixiv', description='根据id获取对应illust')
     @param(name='work_id', help='作品id', default=-1)
     async def get_illust_work(self, event: GroupMessageEvent, work_id: int = -1):
@@ -111,7 +125,8 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         work_details = await self.pixiv_api.get_work_details(work_id)
         if work_details.meta_pages:
             if len(work_details.meta_pages) > self.pixiv_config.max_single_work_cnt:
-                await event.reply(f'超过单个作品数量限制({self.pixiv_config.max_single_work_cnt},不下载)')
+                await event.reply(f'超过单个作品数量限制({self.pixiv_config.max_single_work_cnt}),不下载')
+                return
         download_result = await self.pixiv_api.download([work_id])
         if download_result.total != download_result.success:
             logger.error(f'{work_id}下载失败')
