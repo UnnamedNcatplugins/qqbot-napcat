@@ -60,6 +60,7 @@ def sync_config[T](plugin: NcatBotPlugin, config_instance: T) -> None:
 class PixivConfig:
     refresh_token: str = field(default='')
     proxy_server: str = field(default='')
+    max_single_work_cnt: int = field(default=20)
 
 
 class UnnamedPixivIntegrate(NcatBotPlugin):
@@ -71,20 +72,21 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
 
     init: bool = False
     pixiv_api: Optional[BetterPixiv] = None
+    pixiv_config: Optional[PixivConfig] = None
 
     async def on_load(self) -> None:
-        pixiv_config = bind_config(self, PixivConfig)
-        if pixiv_config.refresh_token:
-            logger.info(f'正在使用token: {pixiv_config.refresh_token}')
+        self.pixiv_config = bind_config(self, PixivConfig)
+        if self.pixiv_config.refresh_token:
+            logger.info(f'正在使用token: {self.pixiv_config.refresh_token}')
             self.init = True
         else:
             logger.error(f'必须配置refresh_token, 将不会初始化pixiv功能')
             return
-        if pixiv_config.proxy_server:
-            logger.info(f'检测到代理服务器: {pixiv_config.proxy_server}')
-        self.pixiv_api = BetterPixiv(proxy=pixiv_config.proxy_server if pixiv_config.proxy_server else None,
+        if self.pixiv_config.proxy_server:
+            logger.info(f'检测到代理服务器: {self.pixiv_config.proxy_server}')
+        self.pixiv_api = BetterPixiv(proxy=self.pixiv_config.proxy_server if self.pixiv_config.proxy_server else None,
                                      logger=get_log('pixiv'))
-        await self.pixiv_api.api_login(refresh_token=pixiv_config.refresh_token)
+        await self.pixiv_api.api_login(refresh_token=self.pixiv_config.refresh_token)
         await self.pixiv_api.get_work_details(115081727)
         cur_loop = asyncio.get_running_loop()
         logger.debug(f'on_load使用的loop: {cur_loop}, id: {id(cur_loop)}')
@@ -106,6 +108,10 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             await event.reply(f'未输入作品id,重试')
             return
         self.pixiv_api.set_storge_path(self.workspace / Path('temp_dl'))
+        work_details = await self.pixiv_api.get_work_details(work_id)
+        if work_details.meta_pages:
+            if len(work_details.meta_pages) > self.pixiv_config.max_single_work_cnt:
+                await event.reply(f'超过单个作品数量限制({self.pixiv_config.max_single_work_cnt},不下载)')
         download_result = await self.pixiv_api.download([work_id])
         if download_result.total != download_result.success:
             logger.error(f'{work_id}下载失败')
