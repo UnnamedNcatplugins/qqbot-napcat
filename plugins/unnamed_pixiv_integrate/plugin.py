@@ -7,6 +7,7 @@ from dataclasses import dataclass, fields, is_dataclass, field, MISSING
 from typing import Optional
 from .better_pixiv import BetterPixiv, Tag
 from pathlib import Path
+import json
 
 PLUGIN_NAME = 'UnnamedPixivIntegrate'
 
@@ -46,6 +47,14 @@ def bind_config[T](plugin: NcatBotPlugin, config_class: type[T]) -> T:
     return config_class(**loaded_data)
 
 
+# noinspection PyDataclass,PyArgumentList
+def sync_config[T](plugin: NcatBotPlugin, config_class: type[T]):
+    if not is_dataclass(config_class):
+        raise TypeError("config_class must be a dataclass")
+    for reg_field in fields(config_class):
+        plugin.config[reg_field.name] = getattr(config_class, reg_field.name)
+
+
 @dataclass
 class PixivConfig:
     refresh_token: str = field(default='')
@@ -53,6 +62,7 @@ class PixivConfig:
     max_single_work_cnt: int = field(default=20)
     enable_group_filter: bool = field(default=False)
     filter_group: list[int] = field(default_factory=list)
+    daily_illust_source: str = field(default='')
 
 
 @filter_registry.register('group_filter')
@@ -86,11 +96,32 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         self.pixiv_api = BetterPixiv(proxy=self.pixiv_config.proxy_server if self.pixiv_config.proxy_server else None,
                                      logger=get_log('pixiv'))
         await self.pixiv_api.api_login(refresh_token=self.pixiv_config.refresh_token)
-        if self.pixiv_config.enable_group_filter:
+
+        def init_group_filter():
             logger.info(f'启用指定群聊过滤: {self.pixiv_config.filter_group}')
             global enable_group_filter, filter_groups
             enable_group_filter = True
             filter_groups += self.pixiv_config.filter_group
+
+        if self.pixiv_config.enable_group_filter:
+            init_group_filter()
+
+        async def init_daily_illust():
+            logger.info('检测到每日涩图功能已配置')
+            # 目前只实现收藏拉取功能
+            if not self.pixiv_config.daily_illust_source.isdigit():
+                logger.warning(f'每日涩图源配置无效: {self.pixiv_config.daily_illust_source} 无法启用')
+                return
+            source_id = int(self.pixiv_config.daily_illust_source)
+            test_source_list = await self.pixiv_api.get_favs(source_id, max_page_cnt=1)
+            if not test_source_list:
+                logger.warning(f'测试拉取每日涩图源时出错, 无法启用')
+                return
+            logger.info(f'通过所有校验, 但功能没写完, 还是不启用')
+
+        if self.pixiv_config.daily_illust_source:
+            await init_daily_illust()
+
         await super().on_load()
 
     async def on_close(self) -> None:
@@ -125,7 +156,6 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             await self.api.send_group_image(event.group_id, str(path))
             await asyncio.sleep(1)
         await event.reply('发送完成')
-
 
     @group_filter
     @filter_registry.filters('group_filter')

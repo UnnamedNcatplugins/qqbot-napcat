@@ -399,22 +399,28 @@ class BetterPixiv:
         return [work['id'] for work in user_works['illusts']]
 
     @retry_on_error
-    async def get_favs(self, user_id=88725668, hook_func: Optional[Callable[..., Awaitable]] = None) -> list:
+    async def get_favs(self, user_id=88725668,
+                       max_page_cnt: int = 0,
+                       hook_func: Optional[Callable[..., Awaitable]] = None) -> list:
         fav_list = []
+        now_page = 1
         max_mark = None
         try:
             while True:
-                favs: dict = await self.api.user_bookmarks_illust(user_id, max_bookmark_id=int(max_mark))
+                favs: dict = await self.api.user_bookmarks_illust(user_id, max_bookmark_id=int(max_mark) if max_mark else None)
                 next_url: str = favs['next_url']
                 if not next_url:
                     return fav_list
-                self.logger.info('收藏翻页中')
+                self.logger.debug(f'收藏翻页中, {next_url=}')
                 index = next_url.find('max_bookmark_id=') + len('max_bookmark_id=')
                 max_mark = next_url[index:]
                 fav_list += [work['id'] for work in favs['illusts']]
                 await asyncio.sleep(0.5)
                 if hook_func:
                     await hook_func(favs)
+                if max_page_cnt:
+                    if now_page >= max_page_cnt:
+                        raise KeyError
         except KeyError:
             return fav_list
         except Exception as e:
