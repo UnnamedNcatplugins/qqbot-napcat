@@ -24,7 +24,6 @@ def bind_config[T](plugin: NcatBotPlugin, config_class: type[T]) -> T:
         raise TypeError("config_class must be a dataclass")
     # 1. 自动注册配置项
     for reg_field in fields(config_class):
-        default_val = None
         # === 修复核心：使用 MISSING 哨兵值进行判断 ===
         # 情况 A: 字段定义了 default (例如: a: int = 1)
         if reg_field.default is not MISSING:
@@ -110,22 +109,23 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         if work_id == -1:
             await event.reply(f'未输入作品id,重试')
             return
+        await event.reply(f'命令收到')
         self.pixiv_api.set_storge_path(self.workspace / Path('temp_dl'))
         work_details = await self.pixiv_api.get_work_details(work_id)
         if work_details.meta_pages:
             if len(work_details.meta_pages) > self.pixiv_config.max_single_work_cnt:
                 await event.reply(f'超过单个作品数量限制({self.pixiv_config.max_single_work_cnt}),不下载')
                 return
-        download_result = await self.pixiv_api.download([work_id])
+        download_result = await self.pixiv_api.download([work_details])
         if download_result.total != download_result.success:
-            logger.error(f'{work_id}下载失败')
+            logger.error(f'{download_result}下载失败')
             await event.reply(f'下载失败')
             return
-        group_id = event.group_id
         for path in download_result.paths:
-            await self.api.send_group_image(group_id, str(path))
+            await self.api.send_group_image(event.group_id, str(path))
             await asyncio.sleep(1)
-        await event.reply(f'发送完成')
+        await event.reply('发送完成')
+
 
     @group_filter
     @filter_registry.filters('group_filter')

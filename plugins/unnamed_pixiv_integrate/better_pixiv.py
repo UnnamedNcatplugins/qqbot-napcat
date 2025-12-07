@@ -1,17 +1,16 @@
 import asyncio
 import functools
 import io
-import json
 import logging
 import os
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Union, Optional
-from tqdm import tqdm
+from typing import Awaitable, Callable, Optional, Self
 import natsort
 from PIL import Image
 from pixivpy_async import *
+from tqdm import tqdm
 
 
 @dataclass
@@ -84,7 +83,7 @@ class DownloadResult:
     success: int
     paths: list[Path]
     extra_info: Optional[str]
-    failed_unit: list
+    failed_unit: list[Self | str]
 
 
 class PixivError(Exception):
@@ -111,12 +110,6 @@ class BetterPixiv:
             self.logger = logger
 
     async def ensure_connection(self):
-        """
-        核心逻辑：
-        1. 检查当前 Session 是否属于当前 Loop，且是否存活。
-        2. 如果死了，立刻原地复活一个新的 Session。
-        3. 关键：将旧的 Token 注入新对象，**避免** 重新发起 api_login 网络请求。
-        """
         # 1. 获取当前 Loop
         current_loop = asyncio.get_running_loop()
         # 2. 检查是否需要重置 (Session 为空，或 Session 关闭，或 Loop 不一致)
@@ -127,20 +120,16 @@ class BetterPixiv:
         is_loop_changed = False
         try:
             if self.api and self.client:
+                # noinspection PyProtectedMember
                 if self.api.session._loop is not current_loop:
                     is_loop_changed = True
         except Exception as e:
-            e = e
+            self.logger.debug(e)
             pass
-        if self.api is None or is_loop_changed:
+        if is_loop_changed:
             self.logger.debug("检测到 Event Loop 变更或 Session 失效，正在执行热重载...")
-            # --- 步骤 A: 抢救遗产 (保存 Token) ---
-            saved_access_token = None
-            saved_refresh_token = None
-            if self.api:
-                # 尝试从旧对象里读取 Token
-                saved_access_token = getattr(self.api, 'access_token', None)
-                saved_refresh_token = getattr(self.api, 'refresh_token', None)
+            saved_access_token = self.api.access_token
+            saved_refresh_token = self.api.refresh_token
             # --- 步骤 B: 重塑肉身 (创建新 Session) ---
             # 这一步必须在当前 Loop 执行
             # 注意：PixivClient 只是配置容器，start() 才是创建 session
@@ -148,8 +137,9 @@ class BetterPixiv:
             await self.client.close()
             self.client = PixivClient(proxy=self.proxy, bypass=self.bypass)
             # 创建新的 API 对象 (此时它是未登录状态)
-            self.api = AppPixivAPI(client=self.client.start(), proxy=self.proxy, bypass=self.bypass)
+            self.api = AppPixivAPI(client=self.client.start())
             # --- 步骤 C: 灵魂注入 (跳过登录，直接 Set Auth) ---
+            self.logger.debug(f'寻获的token at: {saved_access_token} rt: {saved_refresh_token}')
             if saved_access_token and saved_refresh_token:
                 self.logger.debug("恢复登录凭证，跳过网络登录步骤。")
                 # 直接设置内存状态，不发包！
@@ -166,23 +156,22 @@ class BetterPixiv:
         @functools.wraps(func)
         async def wrapper(self, *args, **kwargs):
             try:
-                # 这里的 self 是运行时传入的 BetterPixiv 实例
-                self.logger.debug(f'self type is : {self.__class__}')
-                # self.logger.debug(f'正在执行: {func.__name__}, 参数: {args}, {kwargs}') # 日志太啰嗦可以注释掉
-                return await func(self, *args, **kwargs)
-            except RuntimeError as e:
-                # 捕获 Event loop is closed 异常
-                if str(e) == 'Event loop is closed':
-                    self.logger.debug(f'检测到 Event loop is closed ({func.__name__})，正在尝试热重载 Session...')
-                    # 关键点：调用上一轮我们定义的修复方法
-                    # 如果你还没写 ensure_connection，请务必把上一轮的 ensure_connection 方法加到类里
-                    await self.ensure_connection()
-                    self.logger.info(f'Session 热重载完成，正在重试: {func.__name__}')
-                    # 修复后重试原函数
+                try:
+                    # 这里的 self 是运行时传入的 BetterPixiv 实例
                     return await func(self, *args, **kwargs)
-                else:
-                    # 如果是其他 Runtime 错误，直接抛出，不要吞掉
-                    raise e
+                except RuntimeError as e:
+                    # 捕获 Event loop is closed 异常
+                    if str(e) == 'Event loop is closed':
+                        self.logger.debug(f'检测到 Event loop is closed ({func.__name__})，正在尝试热重载 Session...')
+                        # 关键点：调用上一轮我们定义的修复方法
+                        # 如果你还没写 ensure_connection，请务必把上一轮的 ensure_connection 方法加到类里
+                        await self.ensure_connection()
+                        self.logger.debug(f'Session 热重载完成，正在重试: {func.__name__}')
+                        # 修复后重试原函数
+                        return await func(self, *args, **kwargs)
+                    else:
+                        # 如果是其他 Runtime 错误，直接抛出，不要吞掉
+                        raise e
             except PixivError:
                 self.logger.warning(f'Token可能过期, 尝试刷新后重试: {func.__name__}')
                 # 使用实例中的锁
@@ -225,73 +214,95 @@ class BetterPixiv:
     async def __download_single_file(self,
                                      sem: asyncio.Semaphore,
                                      url: str,
-                                     phase_callback: Optional[Callable[[str], None]] = None) -> Path:
+                                     file_downloaded_callback: Optional[Callable[[str], None]] = None) -> Path:
         async with sem:
             for retry_times in range(10):
                 try:
                     await self.api.download(url, path=str(self.storge_path))
-                    if phase_callback:
-                        phase_callback(url)
+                    if file_downloaded_callback:
+                        file_downloaded_callback(url)
                     break
                 except Exception as dl_e:
                     # 使用 tqdm.write 防止打断进度条
-                    tqdm.write(f'下载{os.path.basename(url)} 异常: {dl_e}, 重试第{retry_times}次')
+                    self.logger.warning(f'下载{os.path.basename(url)} 异常: {dl_e}, 重试第{retry_times}次')
                     await asyncio.sleep(1)
             else:
                 raise PixivError(f"Download failed after retries: {url}")
-
             return Path(self.storge_path) / Path(os.path.basename(url))
 
     async def __download_single_work(self,
-                                     work_ptr: int | WorkDetail,
+                                     work_details: WorkDetail,
                                      sem: asyncio.Semaphore,
-                                     phase_callback: Optional[Callable[[int, str], None]] = None,
-                                     meta_callback: Optional[Callable[[int], None]] = None):  # 新增 meta_callback
+                                     phase_callback: Optional[Callable[[int, str], None]] = None) -> DownloadResult:
         download_result = DownloadResult(task_id=0, total=0, success=0, paths=[], extra_info=None, failed_unit=[])
-        if isinstance(work_ptr, int):
-            download_result.task_id = work_ptr
-            work_id = work_ptr
-            try:
-                cur_loop = asyncio.get_running_loop()
-                self.logger.debug(f'__download_single使用的loop: {cur_loop}, id {id(cur_loop)}')
-                work_details = await self.get_work_details(work_id)
-            except Exception as e:
-                self.logger.warning(f"获取作品 {work_id} 详情失败: {e}")
-                return download_result
-        else:
-            work_details = work_ptr
-            work_id = work_ptr.id
-            download_result.task_id = work_id
-        
-        if not work_details:
-            download_result.extra_info = 'work不存在或可能不是illust'
+        if work_details.type not in ("illust", "ugoira"):
+            download_result.extra_info = 'work不是illust或ugoria'
             return download_result
+        if work_details.type == 'illust':
+            # 解析 URL 列表
+            work_url_list = []
+            if work_details.meta_pages:
+                work_url_list = [cop.image_urls.original for cop in work_details.meta_pages]
+            elif work_details.meta_single_page:
+                work_url_list.append(work_details.meta_single_page.original_image_url)
+            download_result.total = len(work_url_list)
 
-        # 解析 URL 列表
-        work_url_list = []
-        if work_details.meta_pages:
-            work_url_list = [cop.image_urls.original for cop in work_details.meta_pages]
-        elif work_details.meta_single_page:
-            work_url_list.append(work_details.meta_single_page.original_image_url)
-
-        download_result.total = len(work_url_list)
-
-        # [关键步骤] 解析完元数据后，立刻通知总进度条：我们要多下载 len(work_url_list) 个文件了
-        if meta_callback:
-            meta_callback(len(work_url_list))
-
-        def _phase_callback(single_url: str):
+            def _phase_callback(single_url: str):
+                download_result.success += 1
+                download_result.paths.append(Path(self.storge_path) / Path(os.path.basename(single_url)))
+                if phase_callback:
+                    phase_callback(work_details.id, single_url)
+            tasks = [self.__download_single_file(sem, url, _phase_callback) for url in work_url_list]
+            await asyncio.gather(*tasks)
+        else:
+            download_result.total = 1
+            ugoira_metadata = await self.api.ugoira_metadata(work_details.id)
+            zip_url = ugoira_metadata['ugoira_metadata']['zip_urls']['medium']
+            filename = Path(zip_url.split('/')[-1])
+            zip_path = self.storge_path / filename
+            try:
+                if not zip_path.exists():
+                    if not await self.__download_single_file(sem, zip_url):
+                        download_result.failed_unit.append(zip_url)
+                        download_result.extra_info = f'Error in downloading {zip_url}'
+                        return download_result
+            except KeyboardInterrupt:
+                raise KeyboardInterrupt
+            except Exception as e:
+                self.logger.warning(e)
+                download_result.extra_info = str(e)
+                download_result.failed_unit.append(zip_url)
+                return download_result
+                # 打开ZIP文件
+            with zipfile.ZipFile(zip_path, 'r') as zip_file:
+                # 过滤出图片文件（假设支持的图片格式为 .png 和 .jpg）
+                image_files = [f for f in zip_file.namelist() if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+                image_files = natsort.natsorted(image_files)
+                # 加载图片到内存
+                images = []
+                for image_file in image_files:
+                    with zip_file.open(image_file) as image_data:
+                        images.append(Image.open(io.BytesIO(image_data.read())))
+            # 确保有图片文件
+            if not images:
+                download_result.failed_unit.append(zip_url)
+                download_result.extra_info = 'No images found in the ZIP file'
+                return download_result
+            # 将所有图片转换为 GIF 并保存
+            gif_path = self.storge_path / Path(f'{filename}.gif')
+            images[0].save(
+                gif_path,
+                save_all=True,
+                append_images=images[1:],
+                duration=100,
+                loop=1
+            )
+            zip_path.unlink()
+            download_result.paths.append(gif_path)
             download_result.success += 1
-            download_result.paths.append(Path(self.storge_path) / Path(os.path.basename(single_url)))
-            if phase_callback:
-                
-                phase_callback(work_id, single_url)
-
-        tasks = [self.__download_single_file(sem, url, _phase_callback) for url in work_url_list]
-        await asyncio.gather(*tasks)
         return download_result
 
-    async def download(self, work_ids: list[int | WorkDetail],
+    async def download(self, work_ids: list[WorkDetail],
                        max_workers: int = 3,
                        phase_callback: Optional[Callable[[int, str], None]] = None) -> DownloadResult:
         if not isinstance(work_ids, list):
@@ -299,19 +310,14 @@ class BetterPixiv:
         download_result = DownloadResult(task_id=0, total=0, success=0, paths=[], extra_info=None, failed_unit=[])
         if len(work_ids) == 0:
             return download_result
-        assert isinstance(work_ids[0], int) or isinstance(work_ids[0], WorkDetail)
+        assert isinstance(work_ids[0], WorkDetail)
         semaphore = asyncio.Semaphore(max_workers)
         self.logger.info(f'启动下载任务, 目标ID数: {len(work_ids)}, 最大并发: {max_workers}')
-        pbar_works = tqdm(total=len(work_ids), desc="[作品进度]", position=0, leave=True, colour='green')
-        pbar_files = tqdm(total=0, desc="[文件下载]", position=1, leave=True, unit="img", colour='cyan')
-
-        def on_work_meta_loaded(file_count: int):
-            pbar_files.total += file_count
-            pbar_files.refresh()
+        pbar_works: Optional[tqdm] = None
+        if phase_callback is None:
+            pbar_works = tqdm(total=len(work_ids), desc="[作品进度]", position=0, leave=True, colour='green')
 
         def on_file_downloaded(work_id, url):
-            pbar_files.update(1)
-            pbar_files.set_postfix_str(f"ID:{work_id}")
             if phase_callback:
                 phase_callback(work_id, url)
 
@@ -319,39 +325,33 @@ class BetterPixiv:
             res = await self.__download_single_work(
                 wid,
                 semaphore,
-                phase_callback=on_file_downloaded,
-                meta_callback=on_work_meta_loaded
+                phase_callback=on_file_downloaded
             )
-            pbar_works.update(1)  # 完成一个作品，更新上面那个条
+            if pbar_works:
+                pbar_works.update(1)  # 完成一个作品，更新上面那个条
             return res
-        # 创建并执行任务
         tasks = [work_task_wrapper(work_id) for work_id in work_ids]
-        # 使用 gather 等待所有任务
         task_results: list[DownloadResult] = await asyncio.gather(*tasks)
-        # --- 收尾工作 ---
-        pbar_works.close()
-        pbar_files.close()
-        # 统计最终结果
-        download_result.total = len(tasks)  # 这里统计的是作品数
+        if pbar_works:
+            pbar_works.close()
+        download_result.total = len(tasks)
         for task_result in task_results:
             if task_result.total > 0 and task_result.total == task_result.success:
                 download_result.success += 1  # 成功下载的作品数
             else:
-                download_result.failed_unit.append(task_result.task_id)
+                download_result.failed_unit.append(task_result)
             download_result.paths += task_result.paths
         return download_result
 
     @retry_on_error
     async def get_work_details(self, work_id: int) -> Optional[WorkDetail]:
         self.logger.debug(f'正在获取作品详情: {work_id}')
-        cur_loop = asyncio.get_running_loop()
-        self.logger.debug(f'get_work_details使用的loop: {cur_loop}, id: {id(cur_loop)}')
         work_details_json = await self.api.illust_detail(work_id)
         self.logger.debug(f'底层返回: {work_details_json}')
         if isinstance(work_details_json, str):
             raise PixivError(work_details_json)
-        if 'illust' not in work_details_json:
-            return None
+        if work_details_json.get('error', None):
+            raise PixivError(work_details_json)
         illust_detail_json = work_details_json['illust']
         # noinspection PyArgumentList
         return WorkDetail(
@@ -390,51 +390,6 @@ class BetterPixiv:
             total_bookmarks=illust_detail_json['total_bookmarks'],
             is_bookmarked=illust_detail_json['is_bookmarked'],
         )
-
-    @retry_on_error
-    async def _get_ugoira(self, work_id) -> Union[dict, None]:
-        ugoira_metadata = await self.api.ugoira_metadata(work_id)
-        if ugoira_metadata:
-            return ugoira_metadata
-        return None
-
-    @retry_on_error
-    async def download_ugoira(self, work_id) -> bool:
-        ugoira_metadata = await self._get_ugoira(work_id)
-        zip_url = ugoira_metadata['ugoira_metadata']['zip_urls']['medium']
-        filename = zip_url.split('/')[-1]
-        try:
-            if not os.path.exists(os.path.join(self.storge_path, filename)):
-                if not await self.api.download(zip_url, path=str(self.storge_path)):
-                    return False
-        except KeyboardInterrupt:
-            raise KeyboardInterrupt
-        except Exception as e:
-            print(e)
-            return False
-            # 打开ZIP文件
-        with zipfile.ZipFile(os.path.join(self.storge_path, filename), 'r') as zip_file:
-            # 过滤出图片文件（假设支持的图片格式为 .png 和 .jpg）
-            image_files = [f for f in zip_file.namelist() if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-            image_files = natsort.natsorted(image_files)
-            # 加载图片到内存
-            images = []
-            for image_file in image_files:
-                with zip_file.open(image_file) as image_data:
-                    images.append(Image.open(io.BytesIO(image_data.read())))
-        # 确保有图片文件
-        if not images:
-            return False
-        # 将所有图片转换为 GIF 并保存
-        images[0].save(
-            os.path.join(self.storge_path, f'{work_id}.gif'),
-            save_all=True,
-            append_images=images[1:],
-            duration=100,
-            loop=0
-        )
-        os.remove(os.path.join(self.storge_path, filename))
-        return True
 
     @retry_on_error
     async def get_user_works(self, user_id: int) -> list:
