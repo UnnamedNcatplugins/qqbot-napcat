@@ -1,6 +1,5 @@
 import asyncio
 import enum
-
 from ncatbot.plugin_system import NcatBotPlugin, command_registry, group_filter, param
 from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
 from ncatbot.utils import get_log

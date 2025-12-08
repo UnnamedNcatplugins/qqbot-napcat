@@ -9,7 +9,7 @@ logger = get_log('ConfigProxy')
 
 
 def yaml_dump_enum(dumper, data):
-    return dumper.represent_dict(str(data.value))
+    return dumper.represent_data(data.value)
 yaml.add_multi_representer(enum.Enum, yaml_dump_enum)
 
 
