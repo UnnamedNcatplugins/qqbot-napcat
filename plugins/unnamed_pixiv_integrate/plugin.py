@@ -223,7 +223,8 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         assert len(download_result.success_units) > 0
         single_result: DownloadResult = download_result.success_units[0]
         for file_path in single_result.success_units:
-            await self.api.send_group_image(event.group_id, str(file_path))
+            send_result = await self.api.send_group_image(event.group_id, str(file_path))
+            logger.info(send_result)
         await event.reply('发送完成')
 
     @filter_registry.filters('group_filter')

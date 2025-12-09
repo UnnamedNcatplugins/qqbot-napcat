@@ -270,6 +270,10 @@ class BetterPixiv:
         async with sem:
             for retry_times in range(10):
                 try:
+                    filename = Path(url.split('/')[-1])
+                    file_path = self.storge_path / filename
+                    if file_path.exists():
+                        return file_path
                     file_result = await self.api.download(url, path=str(self.storge_path))
                     if file_downloaded_callback:
                         file_downloaded_callback(url, file_result)
