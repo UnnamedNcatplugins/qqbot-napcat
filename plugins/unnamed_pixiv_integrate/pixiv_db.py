@@ -10,5 +10,10 @@ class PixivDB:
         # 启用外键约束
         self.session.connection().execute(sqlmodel.text("PRAGMA foreign_keys=ON"))
 
-    def insert_daily_illust_source_rows(self, row: list[DailyIllustSource]):
-        pass
+    def insert_daily_illust_source_rows(self, rows: list[DailyIllustSource]):
+        for row in rows:
+            self.session.add(row)
+        self.session.commit()
+
+    def shutdown(self):
+        self.session.close()

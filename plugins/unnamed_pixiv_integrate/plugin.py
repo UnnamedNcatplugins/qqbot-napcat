@@ -1,14 +1,15 @@
 import enum
-from ncatbot.plugin_system import NcatBotPlugin, command_registry, group_filter, param
+from ncatbot.plugin_system import NcatBotPlugin, command_registry, group_filter, param, admin_filter
 from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
 from ncatbot.utils import get_log
 from ncatbot.core.event import GroupMessageEvent
 from dataclasses import dataclass, field
 from .config_proxy import ProxiedPluginConfig
 from typing import Optional
-from .better_pixiv import BetterPixiv, Tag, DownloadResult
+from .better_pixiv import BetterPixiv, Tag, DownloadResult, WorkDetail
 from pathlib import Path
 from .pixiv_db import PixivDB
+from .pixiv_sqlmodel import DailyIllustSource
 
 PLUGIN_NAME = 'UnnamedPixivIntegrate'
 
@@ -107,7 +108,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
                 db_url = self.workspace / Path('pixiv.db')
                 self.pixiv_db = PixivDB(f'sqlite:///{str(db_url)}')
             else:
-                logger.error(f'每日插画源配置无效: {self.pixiv_config.daily_illust_config} 无法启用')
+                logger.error(f'每日插画源配置无效: {self.pixiv_config.daily_illust_config.source} 无法启用')
 
         if self.pixiv_config.daily_illust_config.enable:
             await init_daily_illust()
@@ -119,11 +120,22 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             await self.pixiv_api.shutdown()
         await super().on_close()
 
-    def update_daily_illust_source(self):
+    async def update_daily_illust_source(self):
+        logger.info(f'开始更新每日插画源')
+        logger.info(f'从 {self.pixiv_config.daily_illust_config.source} 拉取每日插画')
+
+        async def fav_progress(favs: list[WorkDetail], now_page: int):
+            print(f'\r拉取收藏第{now_page}页', end='')
+            sources = [DailyIllustSource(work_id=fav.id, user_id=fav.user.id) for fav in favs]
+            self.pixiv_db.insert_daily_illust_source_rows(sources)
+
         if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user.value:
             source_content = self.pixiv_config.daily_illust_config.source.source_content
             user_id = int(source_content)
-            user_favs = self.pixiv_api.get_favs(user_id)
+            await self.pixiv_api.get_favs(user_id, hook_func=fav_progress)
+        else:
+            logger.error(f'每日插画源配置无效: {self.pixiv_config.daily_illust_config.source} 无法更新')
+        logger.info(f'每日插画源更新完成')
 
     @group_filter
     @filter_registry.filters('group_filter')
@@ -139,6 +151,9 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         await event.reply(f'命令收到')
         self.pixiv_api.set_storge_path(self.workspace / Path('temp_dl'))
         work_details = await self.pixiv_api.get_work_details(work_id)
+        if work_details is None:
+            await event.reply(f'无法获取作品详情, 可能是作品不存在')
+            return
         if work_details.meta_pages:
             if len(work_details.meta_pages) > self.pixiv_config.max_single_work_cnt:
                 await event.reply(f'超过单个作品数量限制({self.pixiv_config.max_single_work_cnt}),不下载')
@@ -170,3 +185,12 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         def plain_tags(tags: list[Tag]):
             return [tag.name for tag in tags]
         await event.reply(f'\n{work_details.title=}\n{work_details.create_date=}\n{work_details.user.name=}\n{work_details.user.id=}\n{plain_tags(work_details.tags)=}')
+
+    @group_filter
+    @admin_filter
+    @command_registry.command('update_illust_source', aliases=['uis'])
+    async def request_update_daliy_illust(self, event: GroupMessageEvent):
+        logger.info(f'收到每日插画源更新请求')
+        await event.reply('开始更新')
+        await self.update_daily_illust_source()
+        await event.reply('更新完成')

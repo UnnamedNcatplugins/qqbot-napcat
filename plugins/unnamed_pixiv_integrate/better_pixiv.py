@@ -137,6 +137,10 @@ class PixivError(Exception):
         super().__init__(self.message)
 
 
+class IllustNotFoundError(PixivError):
+    pass
+
+
 class BetterPixiv:
     def __init__(self, proxy=None, bypass=False, logger: Optional[logging.Logger] = None, debug=False):
         self.client = PixivClient(proxy=proxy, bypass=bypass)
@@ -400,6 +404,8 @@ class BetterPixiv:
         if isinstance(work_details_json, str):
             raise PixivError(work_details_json)
         if work_details_json.get('error', None):
+            if work_details_json['error']['user_message'] == 'ページが見つかりませんでした':
+                return None
             raise PixivError(work_details_json)
         illust_detail_json = work_details_json['illust']
         return build_work_detail(illust_detail_json)
@@ -414,7 +420,7 @@ class BetterPixiv:
     @retry_on_error
     async def get_favs(self, user_id=88725668,
                        max_page_cnt: int = 0,
-                       hook_func: Optional[Callable[..., Awaitable]] = None) -> list:
+                       hook_func: Optional[Callable[[list[WorkDetail], int], Awaitable]] = None) -> list[WorkDetail]:
         fav_list: list[WorkDetail] = []
         now_page = 1
         max_mark = None
@@ -428,18 +434,19 @@ class BetterPixiv:
                 index = next_url.find('max_bookmark_id=') + len('max_bookmark_id=')
                 max_mark = next_url[index:]
                 # fav_list += [work['id'] for work in favs['illusts']]
-                fav_list += [build_work_detail(fav_work) for fav_work in favs['illusts']]
+                segment_favs = [build_work_detail(fav_work) for fav_work in favs['illusts']]
+                fav_list += segment_favs
                 await asyncio.sleep(0.5)
                 if hook_func:
-                    await hook_func(favs)
+                    await hook_func(segment_favs, now_page)
                 if max_page_cnt:
                     if now_page >= max_page_cnt:
                         raise KeyError
+                now_page += 1
         except KeyError:
             return fav_list
-        except Exception as e:
-            self.logger.error(f'获取收藏时发生错误: {e}')
-            return []
+        except RuntimeError:
+            raise
 
     @retry_on_error
     async def get_new_works(self):
