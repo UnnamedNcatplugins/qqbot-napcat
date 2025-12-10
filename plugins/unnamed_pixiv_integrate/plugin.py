@@ -201,7 +201,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         groups_to_post = await self.get_aviliable_groups()
         logger.info(f'将对群聊: {groups_to_post} 进行每日插画推送')
         for group_id in groups_to_post:
-            await self.api.send_group_image(group_id, str(work_path))
+            await self.send_group_image_with_validate(group_id, work_path)
             logger.debug(f'群 {group_id} 推送完成')
         logger.info(f'每日插画推送完成')
 
@@ -212,6 +212,16 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         await event.reply(f'手动测试每日涩图推送')
         await self.post_daily_illust(datetime.now())
         await event.reply(f'执行完成')
+
+    async def send_group_image_with_validate(self, group_id: int, file_path: Path):
+        file_size = file_path.stat().st_size
+        if file_path.stat().st_size > 1024 ** 2:
+            await self.api.send_group_text(group_id, f'当前文件大小为 {str_size(file_size)}, 可能无法发送')
+        try:
+            await self.api.send_group_image(group_id, str(file_path))
+        except NapCatAPIError as napcat_error:
+            logger.exception(f'多半是大文件又传不上了', exc_info=napcat_error)
+            await self.api.send_group_text(group_id, f'框架API抛出错误, 多半又是大文件传不上的问题')
 
     @filter_registry.filters('group_filter')
     @command_registry.command('pixiv', aliases=['p'], description='根据id获取对应illust')
@@ -241,14 +251,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         assert len(download_result.success_units) > 0
         single_result: DownloadResult = download_result.success_units[0]
         for file_path in single_result.success_units:
-            file_size = file_path.stat().st_size
-            if file_path.stat().st_size > 1024 ** 2:
-                await event.reply(f'当前文件大小为 {str_size(file_size)}, 可能无法发送')
-            try:
-                await self.api.send_group_image(event.group_id, str(file_path))
-            except NapCatAPIError as napcat_error:
-                logger.exception(f'多半是大文件又传不上了', exc_info=napcat_error)
-                await event.reply(f'框架API抛出错误, 多半又是大文件传不上的问题')
+            await self.send_group_image_with_validate(int(event.group_id), file_path)
         await event.reply('发送完成')
 
     @filter_registry.filters('group_filter')
