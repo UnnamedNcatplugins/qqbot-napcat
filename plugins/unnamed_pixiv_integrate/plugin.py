@@ -16,10 +16,7 @@ from datetime import datetime, timedelta
 from pydantic import TypeAdapter
 
 PLUGIN_NAME = 'UnnamedPixivIntegrate'
-
 logger = get_log(PLUGIN_NAME)
-enable_group_filter = False
-filter_groups = []
 timedelta_adapter = TypeAdapter(timedelta)
 
 
@@ -56,9 +53,9 @@ def filter_group_by_config(event: BaseMessageEvent) -> bool:
     if not event.is_group_event():
         return False
     assert isinstance(event, GroupMessageEvent)
-    if enable_group_filter:
-        return int(event.group_id) in filter_groups
-    return True
+    if global_plugin_instance is None:
+        raise RuntimeError(f"无法获取到插件实例, 你是不是直接引用了这个文件")
+    return int(event.group_id) in global_plugin_instance.get_aviliable_groups()
 
 
 def str_size(size_in_bytes):
@@ -94,13 +91,9 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             logger.info(f'检测到代理服务器: {self.pixiv_config.proxy_server}')
         self.pixiv_api = BetterPixiv(proxy=self.pixiv_config.proxy_server if self.pixiv_config.proxy_server else None,
                                      logger=get_log('pixiv'))
-        await self.pixiv_api.api_login(refresh_token=self.pixiv_config.refresh_token)
 
         def init_group_filter():
             logger.info(f'启用指定群聊过滤: {self.pixiv_config.filter_group}')
-            global enable_group_filter, filter_groups
-            enable_group_filter = True
-            filter_groups += self.pixiv_config.filter_group
 
         if self.pixiv_config.enable_group_filter:
             init_group_filter()
@@ -135,12 +128,11 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
 
         if self.pixiv_config.daily_illust_config.enable:
             await init_daily_illust()
-
+        global global_plugin_instance
+        global_plugin_instance = self
         await super().on_load()
 
     async def on_close(self) -> None:
-        if self.init:
-            await self.pixiv_api.shutdown()
         await super().on_close()
 
     async def get_aviliable_groups(self):
@@ -283,3 +275,6 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         await event.reply('开始更新')
         await self.update_daily_illust_source()
         await event.reply('更新完成')
+
+
+global_plugin_instance: Optional[UnnamedPixivIntegrate] = None
