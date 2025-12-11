@@ -343,9 +343,6 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             await event.reply(f'未配置refresh_token, 联系管理员进行配置后重启尝试')
             return
         logger.info(f'收到每日插画源更新请求')
-        if self.pixiv_config.daily_illust_config.source.source_type not in (IllustSourceType.user_favs,):
-            await event.reply(f'不是需要更新的类型, 无法更新')
-            return
         await event.reply('开始更新')
         await self.update_daily_illust_source()
         await event.reply('更新完成')
