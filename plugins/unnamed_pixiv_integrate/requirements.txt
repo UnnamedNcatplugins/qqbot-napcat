@@ -4,3 +4,4 @@ tqdm
 natsort
 colorlog
 sqlmodel
+aiofiles

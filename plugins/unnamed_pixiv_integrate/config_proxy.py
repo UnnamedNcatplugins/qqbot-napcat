@@ -42,8 +42,8 @@ class ProxiedPluginConfig:
                     default_val = f.default_factory()
                 if default_val is None:
                     raise TypeError(f'字段 {f.name} 必须给定初始值')
-                logger.debug(f"注册普通配置: {f.name} = {default_val}")
                 if plugin:
+                    logger.debug(f"注册普通配置: {f.name} = {default_val}")
                     plugin.register_config(f.name, default_val, value_type=type(default_val))
                 else:
                     if f.name not in current_dict:

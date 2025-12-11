@@ -1,8 +1,10 @@
 import enum
-from ncatbot.plugin_system import NcatBotPlugin, command_registry, param, admin_filter
+import os
+from ncatbot.plugin_system import NcatBotPlugin, command_registry, param, admin_filter, on_notice
+from ncatbot.plugin_system.event import NcatBotEvent
 from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
 from ncatbot.utils import get_log
-from ncatbot.core.event import BaseMessageEvent, GroupMessageEvent
+from ncatbot.core.event import BaseMessageEvent, GroupMessageEvent, NoticeEvent
 from ncatbot.core.api import NapCatAPIError
 from dataclasses import dataclass, field
 from .config_proxy import ProxiedPluginConfig
@@ -14,6 +16,7 @@ from .pixiv_sqlmodel import DailyIllustSource
 import random
 from datetime import datetime, timedelta
 from pydantic import TypeAdapter
+import aiofiles
 
 PLUGIN_NAME = 'UnnamedPixivIntegrate'
 logger = get_log(PLUGIN_NAME)
@@ -21,12 +24,13 @@ timedelta_adapter = TypeAdapter(timedelta)
 
 
 class IllustSourceType(enum.Enum):
-    user = 0
+    user_favs = 0
+    local_disk = 1
 
 
 @dataclass
 class IllustSource(ProxiedPluginConfig):
-    source_type: IllustSourceType = field(default=IllustSourceType.user)
+    source_type: IllustSourceType = field(default=IllustSourceType.user_favs)
     source_content: str = field(default='')
 
 
@@ -39,6 +43,12 @@ class DailyIllustConfig(ProxiedPluginConfig):
 
 
 @dataclass
+class UpdateCheckerConfig(ProxiedPluginConfig):
+    enable: bool = field(default=False)
+    update_delta: str = field(default='1d')
+
+
+@dataclass
 class PixivConfig(ProxiedPluginConfig):
     refresh_token: str = field(default='')
     proxy_server: str = field(default='')
@@ -46,6 +56,7 @@ class PixivConfig(ProxiedPluginConfig):
     enable_group_filter: bool = field(default=False)
     filter_group: list[int] = field(default_factory=list)
     daily_illust_config: DailyIllustConfig = field(default_factory=DailyIllustConfig)
+    update_checker_config: UpdateCheckerConfig = field(default_factory=UpdateCheckerConfig)
 
 
 @filter_registry.register('group_filter')
@@ -55,7 +66,9 @@ def filter_group_by_config(event: BaseMessageEvent) -> bool:
     assert isinstance(event, GroupMessageEvent)
     if global_plugin_instance is None:
         raise RuntimeError(f"无法获取到插件实例, 你是不是直接引用了这个文件")
-    return int(event.group_id) in global_plugin_instance.get_aviliable_groups()
+    if not global_plugin_instance.pixiv_config.enable_group_filter:
+        return True
+    return int(event.group_id) in global_plugin_instance.pixiv_config.filter_group
 
 
 def str_size(size_in_bytes):
@@ -78,9 +91,14 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
     pixiv_config: Optional[PixivConfig] = None
     pixiv_db: Optional[PixivDB] = None
 
+    # noinspection PyMethodMayBeStatic,PyUnusedLocal
+    async def start_up_handler(self, event: NcatBotEvent):
+        logger.info(f'Bot 已启动, 开始执行运行时初始化')
+        logger.info(f'运行时初始化执行完成')
+
     async def on_load(self) -> None:
         self.pixiv_config = PixivConfig(self)
-
+        self.event_bus.subscribe(event_type='ncatbot.startup_event', handler=self.start_up_handler)
         if self.pixiv_config.refresh_token:
             logger.info(f'正在使用token: {self.pixiv_config.refresh_token}')
             self.init = True
@@ -90,6 +108,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         if self.pixiv_config.proxy_server:
             logger.info(f'检测到代理服务器: {self.pixiv_config.proxy_server}')
         self.pixiv_api = BetterPixiv(proxy=self.pixiv_config.proxy_server if self.pixiv_config.proxy_server else None,
+                                     refresh_token=self.pixiv_config.refresh_token,
                                      logger=get_log('pixiv'))
 
         def init_group_filter():
@@ -106,12 +125,12 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
                 db_url = self.workspace / Path('pixiv.db')
                 self.pixiv_db = PixivDB(f'sqlite:///{str(db_url)}')
             logger.info(f'当前插画过期时间: {timedelta_adapter.validate_python(self.pixiv_config.daily_illust_config.expire_str)}')
-            # 目前只实现收藏拉取功能
-            if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user.value:
-                source_content = self.pixiv_config.daily_illust_config.source.source_content
-                if not source_content:
-                    logger.error(f'未配置源, 无法启用')
-                    return
+            source_content: str = self.pixiv_config.daily_illust_config.source.source_content
+            if not source_content:
+                logger.error(f'未配置源, 无法启用')
+                return
+            if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user_favs.value:
+                logger.info(f'插画源配置为从指定账号拉取收藏')
                 if not source_content.isdigit():
                     logger.error(f'插画源配置无效: {source_content} 需为数字')
                     return
@@ -119,6 +138,12 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
                 test_source_list = await self.pixiv_api.get_favs(source_id, max_page_cnt=1)
                 if not test_source_list:
                     logger.error(f'测试拉取每日插画源时出错, 无法启用')
+                    return
+            elif self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.local_disk.value:
+                logger.info(f'插画源配置为本地图片目录')
+                source_path = Path(source_content)
+                if not source_path.exists():
+                    logger.error(f'插画源目录不存在, 无法启用')
                     return
             else:
                 logger.error(f'每日插画源配置无效: {self.pixiv_config.daily_illust_config.source} 无法启用')
@@ -128,19 +153,26 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
 
         if self.pixiv_config.daily_illust_config.enable:
             await init_daily_illust()
+
         global global_plugin_instance
         global_plugin_instance = self
         await super().on_load()
 
+    @on_notice
+    async def on_group(self, event: NoticeEvent):
+        if event.notice_type == 'group_increase':
+            logger.info(f'群 {event.group_id} 加入')
+        if event.notice_type == 'group_decrease':
+            logger.info(f'群 {event.group_id} 退出')
+
     async def on_close(self) -> None:
         await super().on_close()
 
-    async def get_aviliable_groups(self):
+    async def get_aviliable_groups(self) -> list[int]:
         if self.pixiv_config.enable_group_filter:
-            aviliable_groups = self.pixiv_config.filter_group
-        else:
-            aviliable_groups = [int(str_group_id) for str_group_id in await self.api.get_group_list()]
-        return aviliable_groups
+            return self.pixiv_config.filter_group
+        # noinspection PyTypeChecker
+        return await self.api.get_group_list(info=False)
 
     async def fetch_illust(self, work_id: int) -> list[Path]:
         work_detail = await self.pixiv_api.get_work_details(work_id=work_id)
@@ -164,7 +196,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             sources = [DailyIllustSource(work_id=fav.id, user_id=fav.user.id) for fav in favs]
             self.pixiv_db.insert_daily_illust_source_rows(sources)
 
-        if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user.value:
+        if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user_favs.value:
             source_content = self.pixiv_config.daily_illust_config.source.source_content
             user_id = int(source_content)
             await self.pixiv_api.get_favs(user_id, hook_func=fav_progress)
@@ -172,24 +204,58 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             logger.error(f'每日插画源配置无效: {self.pixiv_config.daily_illust_config.source} 无法更新')
         logger.info(f'每日插画源更新完成')
 
-    async def get_daily_illust(self) -> Optional[tuple[int, Path]]:
+    async def get_daily_illust(self) -> Optional[Path]:
         logger.debug(f'请求提取每日插画')
-        db_result = self.pixiv_db.get_random_daily_illust(expire_time=datetime.now() - timedelta_adapter.validate_python(self.pixiv_config.daily_illust_config.expire_str))
-        if db_result is None:
-            logger.warning(f'无法获取到任何有效插画源')
+        if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user_favs.value:
+            db_result = self.pixiv_db.get_random_daily_illust(expire_time=datetime.now() - timedelta_adapter.validate_python(self.pixiv_config.daily_illust_config.expire_str))
+            if db_result is None:
+                logger.warning(f'无法获取到任何有效插画')
+                return None
+            logger.info(f'获取到随机插画id: {db_result.work_id} 开始拉取')
+            illust_paths = await self.fetch_illust(db_result.work_id)
+            file_path: Path = random.choice(illust_paths)
+            return file_path
+        elif self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.local_disk.value:
+            source_path = Path(self.pixiv_config.daily_illust_config.source.source_content)
+            record_path = self.workspace / Path('.local_illust_post_record')
+            if not record_path.exists():
+                record_path.mkdir()
+            if not source_path.exists():
+                logger.warning(f'运行时把图片目录删了, 你是这个👍')
+                return None
+            file_list = os.listdir(source_path)
+            for file in file_list:
+                file_path = source_path / Path(file)
+                record_file = record_path / Path(file_path.name + '.posted')
+                if record_file.exists():
+                    try:
+                        async with aiofiles.open(record_file, 'r', encoding='utf-8') as f:
+                            last_post_time = datetime.fromisoformat(await f.read())
+                    except ValueError:
+                        logger.warning(f'自己乱改post时间, 你是这个👍')
+                        last_post_time = None
+                else:
+                    last_post_time = None
+                expire_delta = timedelta_adapter.validate_python(self.pixiv_config.daily_illust_config.expire_str)
+                expire_time = datetime.now() - expire_delta
+                if last_post_time is None or datetime.now() - last_post_time < expire_time:
+                    async with aiofiles.open(record_file, mode='w', encoding='utf-8') as f:
+                        await f.write(datetime.now().isoformat())
+                    return file_path
+                else:
+                    continue
+            logger.warning(f'未找到有效插画')
             return None
-        logger.info(f'获取到随机插画id: {db_result.work_id} 开始拉取')
-        illust_paths = await self.fetch_illust(db_result.work_id)
-        file_path: Path = random.choice(illust_paths)
-        return db_result.work_id, file_path
+        else:
+            logger.warning(f'每日插画源配置无效: {self.pixiv_config.daily_illust_config.source}')
+            return None
 
     async def post_daily_illust(self, today: datetime):
         logger.info(f'开始推送每日插画')
-        result = await self.get_daily_illust()
-        if result is None:
+        work_path = await self.get_daily_illust()
+        if work_path is None:
             logger.warning(f'获取插画失败')
             return
-        work_id, work_path = result
         groups_to_post = await self.get_aviliable_groups()
         logger.info(f'将对群聊: {groups_to_post} 进行每日插画推送')
         for group_id in groups_to_post:
@@ -272,6 +338,9 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             await event.reply(f'未配置refresh_token, 联系管理员进行配置后重启尝试')
             return
         logger.info(f'收到每日插画源更新请求')
+        if self.pixiv_config.daily_illust_config.source.source_type not in (IllustSourceType.user_favs,):
+            await event.reply(f'不是需要更新的类型, 无法更新')
+            return
         await event.reply('开始更新')
         await self.update_daily_illust_source()
         await event.reply('更新完成')
