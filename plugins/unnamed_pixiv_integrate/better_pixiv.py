@@ -386,12 +386,33 @@ class BetterPixiv:
             return build_work_detail(illust_detail_json)
 
     @retry_on_error
-    async def get_user_works(self, user_id: int) -> list:
-        async with ClientWrapper(self) as api:
-            user_works = await api.user_illusts(user_id)
-            if isinstance(user_works, str):
-                return []
-            return [work['id'] for work in user_works['illusts']]
+    async def get_user_works(self, user_id: int,
+                             max_page_cnt: int = 0,
+                             hook_func: Optional[Callable[[list[WorkDetail], int], Awaitable]] = None) -> list:
+        user_work_list: list[WorkDetail] = []
+        now_page = 1
+        work_offset: Optional[int] = None
+        try:
+            async with ClientWrapper(self) as api:
+                while True:
+                    works: dict = await api.user_illusts(user_id, offset=work_offset)
+                    next_url: str = works['next_url']
+                    if not next_url:
+                        return user_work_list
+                    index = next_url.find('offset=') + len('offset=')
+                    work_offset = int(next_url[index:])
+                    self.logger.debug(f'作品翻页中, {next_url=}')
+                    segment_works = [build_work_detail(fav_work) for fav_work in works['illusts']]
+                    user_work_list += segment_works
+                    await asyncio.sleep(0.5)
+                    if hook_func:
+                        await hook_func(segment_works, now_page)
+                    if max_page_cnt:
+                        if now_page >= max_page_cnt:
+                            raise KeyError
+                    now_page += 1
+        except KeyError:
+            return user_work_list
 
     @retry_on_error
     async def get_favs(self, user_id: int,
@@ -422,8 +443,6 @@ class BetterPixiv:
                     now_page += 1
         except KeyError:
             return fav_list
-        except RuntimeError:
-            raise
 
     @retry_on_error
     async def get_new_works(self):

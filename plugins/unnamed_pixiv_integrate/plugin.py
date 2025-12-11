@@ -46,6 +46,7 @@ class DailyIllustConfig(ProxiedPluginConfig):
 class UpdateCheckerConfig(ProxiedPluginConfig):
     enable: bool = field(default=False)
     update_delta: str = field(default='1d')
+    target_users: dict[int, Optional[int]] = field(default_factory=dict)
 
 
 @dataclass
@@ -108,7 +109,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         if self.pixiv_config.proxy_server:
             logger.info(f'检测到代理服务器: {self.pixiv_config.proxy_server}')
         self.pixiv_api = BetterPixiv(proxy=self.pixiv_config.proxy_server if self.pixiv_config.proxy_server else None,
-                                     storge_path=self.workspace,
+                                     storge_path=self.workspace / Path('temp_dl'),
                                      refresh_token=self.pixiv_config.refresh_token,
                                      logger=get_log('pixiv'))
 
@@ -154,6 +155,18 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
 
         if self.pixiv_config.daily_illust_config.enable:
             await init_daily_illust()
+
+        async def init_update_checker():
+            logger.info(f'初始化更新检测')
+            authors_dict = self.pixiv_config.update_checker_config.target_users
+            for author, id_anchor in authors_dict:
+                logger.info(f'注册作者id: {author}')
+                if id_anchor is None:
+                    logger.info(f'未设置id锚点, 获取最新作品id中')
+            logger.info(f'更新检测初始化完成')
+
+        if self.pixiv_config.update_checker_config.enable:
+            await init_update_checker()
 
         global global_plugin_instance
         global_plugin_instance = self
@@ -309,6 +322,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             return
         assert len(download_result.success_units) > 0
         single_result: DownloadResult = download_result.success_units[0]
+        logger.debug(f'下载结果: {single_result}')
         for file_path in single_result.success_units:
             await self.send_group_image_with_validate(int(event.group_id), file_path)
 
