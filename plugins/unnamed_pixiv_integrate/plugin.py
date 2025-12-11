@@ -329,6 +329,14 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         await self.post_daily_illust(datetime.now())
         await event.reply(f'执行完成')
 
+    @admin_filter
+    @filter_registry.filters('group_filter')
+    @command_registry.command('test_uc')
+    async def test_update_check(self, event: GroupMessageEvent):
+        await event.reply(f'手动测试更新检查')
+        await self.post_daily_illust(datetime.now())
+        await event.reply(f'执行完成')
+
     async def send_group_image_with_validate(self, group_ids: int | list[int], file_path: Path):
         if isinstance(group_ids, int):
             group_ids = [group_ids]
