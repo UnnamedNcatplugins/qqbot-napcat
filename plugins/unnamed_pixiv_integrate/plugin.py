@@ -1,7 +1,6 @@
 import enum
 import os
 import shutil
-
 from ncatbot.plugin_system import NcatBotPlugin, command_registry, param, admin_filter, on_notice
 from ncatbot.plugin_system.event import NcatBotEvent
 from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
@@ -9,9 +8,6 @@ from ncatbot.utils import get_log
 from ncatbot.core.event import BaseMessageEvent, GroupMessageEvent, NoticeEvent
 from ncatbot.core.api import NapCatAPIError
 from dataclasses import dataclass, field
-
-from pydantic.v1.networks import host_regex
-
 from .config_proxy import ProxiedPluginConfig
 from typing import Optional
 from .better_pixiv import BetterPixiv, Tag, DownloadResult, WorkDetail
@@ -419,7 +415,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             await event.reply(f'未输入作品id,重试')
             return
         await event.reply(f'命令收到')
-        self.pixiv_api.set_storge_path(self.workspace / Path('temp_dl'))
+
         work_details = await self.pixiv_api.get_work_details(work_id)
         if work_details is None:
             await event.reply(f'无法获取作品详情, 可能是作品不存在')
