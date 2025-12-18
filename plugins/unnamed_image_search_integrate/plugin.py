@@ -2,7 +2,7 @@ from ncatbot.plugin_system import NcatBotPlugin, on_group_at
 from .config_proxy import ProxiedPluginConfig
 from dataclasses import dataclass, field
 from ncatbot.core.event import GroupMessageEvent, Reply
-from ncatbot.core.event.message_segment.message_segment import Image, Text
+from ncatbot.core.event.message_segment.message_segment import Image, PlainText
 from ncatbot.utils import get_log
 import httpx
 from pydantic import BaseModel, Field
@@ -232,7 +232,7 @@ class UnnamedImageSearchIntegrate(NcatBotPlugin):
         for message_segment in event.message:
             if message_segment.msg_seg_type == 'text':
                 logger.debug(f'解析到文本消息段, 类型: {type(message_segment)}')
-                assert isinstance(message_segment, Text)
+                assert isinstance(message_segment, PlainText)
                 if message_segment.text.replace(' ', '') == 'si':
                     has_command = True
                 continue
