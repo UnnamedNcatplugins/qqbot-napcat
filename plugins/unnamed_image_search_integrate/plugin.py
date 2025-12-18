@@ -1,8 +1,8 @@
 from ncatbot.plugin_system import NcatBotPlugin, on_group_at
 from .config_proxy import ProxiedPluginConfig
 from dataclasses import dataclass, field
-from ncatbot.core.event import GroupMessageEvent, Reply, Text
-from ncatbot.core.event.message_segment.message_segment import Image
+from ncatbot.core.event import GroupMessageEvent, Reply
+from ncatbot.core.event.message_segment.message_segment import Image, Text
 from ncatbot.utils import get_log
 import httpx
 from pydantic import BaseModel, Field
@@ -231,6 +231,7 @@ class UnnamedImageSearchIntegrate(NcatBotPlugin):
         logger.debug(f'收到at消息, 开始解析')
         for message_segment in event.message:
             if message_segment.msg_seg_type == 'text':
+                logger.debug(f'解析到文本消息段, 类型: {type(message_segment)}')
                 assert isinstance(message_segment, Text)
                 if message_segment.text.replace(' ', '') == 'si':
                     has_command = True
@@ -248,6 +249,9 @@ class UnnamedImageSearchIntegrate(NcatBotPlugin):
                 logger.debug(f'被引用消息非图片, 实际类型: {cited_message.message.messages[0].msg_seg_type}')
             logger.debug(f'引用消息类型校验通过, {type(cited_message.message.messages[0])}')
             single_cited_message = cited_message.message.messages[0]
+            if not isinstance(single_cited_message, Image):
+                logger.error('消息类型不匹配')
+                raise AssertionError('消息类型不匹配')
             image_message = single_cited_message
         if image_message is None:
             logger.debug(f'未置值')
