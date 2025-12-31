@@ -1,7 +1,0 @@
-pixivpy-async
-pillow
-tqdm
-natsort
-colorlog
-sqlmodel
-aiofiles
