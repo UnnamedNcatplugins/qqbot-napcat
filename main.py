@@ -33,7 +33,26 @@ async def cmd_func(event: GroupMessageEvent):
             continue
     if shell_cmd is None:
         return
-    await event.reply(subprocess.run(shell_cmd, capture_output=True, text=True, shell=True).stdout)
+    try:
+        # 设置 timeout=10，意味着命令最多跑10秒，超时就杀掉
+        # 这里的 capture_output=True 等价于 stdout=PIPE, stderr=PIPE
+        result = subprocess.run(
+            shell_cmd,
+            capture_output=True,
+            text=True,
+            shell=True,
+            timeout=10  # <--- 关键修改：加上超时时间
+        )
+        output = result.stdout
+        if result.stderr:
+            output += f"\n[Stderr]\n{result.stderr}"
+
+    except subprocess.TimeoutExpired:
+        # 如果超时了，subprocess.run 会自动尝试杀掉进程，并抛出此异常
+        output = f"⚠️ 命令执行超时（超过10秒），已被强制终止。\n请避免执行 top/vim 等交互式或长耗时命令。"
+    except Exception as e:
+        output = f"执行出错: {str(e)}"
+    await event.reply(output)
 
 
 bot.run_frontend()
