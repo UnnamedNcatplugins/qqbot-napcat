@@ -2,5 +2,9 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/plugins/cm-integrate" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/plugins/image-search-integrate" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/plugins/jmcomic-integrate" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/plugins/pixiv-integrate" vcs="Git" />
   </component>
 </project>
