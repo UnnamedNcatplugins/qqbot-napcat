@@ -1,8 +1,8 @@
 from pathlib import Path
 from ncatbot.core import BotClient
-from ncatbot.plugin_system import on_group_poke, on_group_at, admin_filter
-from ncatbot.core.event import PokeNoticeEvent, GroupMessageEvent
-from ncatbot.core.event.message_segment.message_segment import PlainText
+from ncatbot.plugin_system import on_group_poke, on_group_at, admin_filter, on_message
+from ncatbot.core.event import PokeNoticeEvent, GroupMessageEvent, BaseMessageEvent, PrivateMessageEvent
+from ncatbot.core.event.message_segment.message_segment import PlainText, Node, Forward
 from ncatbot.utils import status, get_log, ncatbot_config
 import subprocess
 bot = BotClient()
@@ -53,6 +53,28 @@ async def cmd_func(event: GroupMessageEvent):
     except Exception as e:
         output = f"执行出错: {str(e)}"
     await event.reply(output)
+
+
+@on_message
+async def export_msgs(event: BaseMessageEvent):
+    if event.message_type != 'private':
+        return
+    assert isinstance(event, PrivateMessageEvent)
+    if event.message.messages[0].msg_seg_type != 'forward':
+        return
+    forward_msg = event.message.messages[0]
+    assert isinstance(forward_msg, Forward)
+    forward_content = await forward_msg.get_content()
+    await event.reply('检测到合并转发, 开始导出')
+    sum_str = ''
+    for node in forward_content:
+        if node.msg_seg_type != 'node':
+            continue
+        node_str = node.get_summary() + '\n'
+        sum_str += node_str
+    with open(f'{forward_msg.id}.txt', 'w', encoding='utf-8') as f:
+        f.write(sum_str)
+    await event.reply(f'导出完成, 文件名为{forward_msg.id}.txt')
 
 
 bot.run_frontend()
