@@ -4,6 +4,7 @@ from ncatbot.plugin_system import on_group_poke, on_group_at, admin_filter, on_m
 from ncatbot.core.event import PokeNoticeEvent, GroupMessageEvent, BaseMessageEvent, PrivateMessageEvent
 from ncatbot.core.event.message_segment.message_segment import PlainText, Node, Forward
 from ncatbot.utils import status, get_log, ncatbot_config
+from ncatbot.utils.error import NcatBotConnectionError
 import subprocess
 bot = BotClient()
 WHAT_JPG = Path('what.jpg')
@@ -79,4 +80,15 @@ async def export_msgs(event: BaseMessageEvent):
     await event.reply(f'导出完成, 文件名为{forward_msg.id}.txt')
 
 
-bot.run_frontend()
+retry_cnt = 0
+
+
+while True:
+    try:
+        if retry_cnt >= 10:
+            logger.error(f'连接重试已达最大限制, 退出')
+            break
+        bot.run_frontend()
+    except NcatBotConnectionError as ncne:
+        retry_cnt += 1
+        logger.warning(f'检测到napcat主动关闭链接错误, 尝试恢复')
