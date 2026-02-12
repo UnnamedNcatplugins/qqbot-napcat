@@ -2,13 +2,20 @@ from pathlib import Path
 from ncatbot.core import BotClient
 from ncatbot.plugin_system import on_group_poke, on_group_at, admin_filter, on_message
 from ncatbot.core.event import PokeNoticeEvent, GroupMessageEvent, BaseMessageEvent, PrivateMessageEvent
-from ncatbot.core.event.message_segment.message_segment import PlainText, Node, Forward
+from ncatbot.core.event.message_segment.message_segment import PlainText, Forward
 from ncatbot.utils import status, get_log, ncatbot_config
 from ncatbot.utils.error import NcatBotConnectionError
+import ncatbot
 import subprocess
 bot = BotClient()
 WHAT_JPG = Path('what.jpg')
 logger = get_log('Main')
+
+# 用户有义务自行确保密码强度
+ncatbot.utils.config.strong_password_check = lambda x: True
+# hook以确保远端模式正常运行
+if ncatbot_config.napcat.remote_mode:
+    ncatbot.utils.config.is_napcat_local = lambda x: False
 
 
 @on_group_poke
