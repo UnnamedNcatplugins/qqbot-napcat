@@ -14,3 +14,7 @@
 	path = plugins/pixiv-integrate
 	url = https://github.com/UnnamedNcatplugins/pixiv-integrate
 	branch = master
+[submodule "plugins/simple-chatbot"]
+    path = plugins/simple-chatbot
+    url = https://github.com/UnnamedNcatplugins/simple-chatbot
+    branch = master

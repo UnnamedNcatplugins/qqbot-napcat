@@ -6,5 +6,6 @@
     <mapping directory="$PROJECT_DIR$/plugins/image-search-integrate" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/plugins/jmcomic-integrate" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/plugins/pixiv-integrate" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/plugins/simple-chatbot" vcs="Git" />
   </component>
 </project>
