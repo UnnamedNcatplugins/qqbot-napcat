@@ -16,5 +16,5 @@
 	branch = master
 [submodule "plugins/simple-chatbot"]
 	path = plugins/simple-chatbot
-	url = ./plugins/simple-chatbot
+	url = https://github.com/UnnamedNcatplugins/simple-chatbot
     branch = master
