@@ -88,7 +88,7 @@ async def export_msgs(event: BaseMessageEvent):
                 assert isinstance(msg_seg, Reply)
                 cited_msg = await status.global_api.get_msg(msg_seg.id)
                 cited_content = cited_msg.raw_message
-        node_str = None if cited_content is None else f'[引用: {cited_content}]'
+        node_str = '' if cited_content is None else f'[引用: {cited_content}]'
         node_str += node.get_summary() + '\n'
         sum_str += node_str
     with open(f'{forward_msg.id}.txt', 'w', encoding='utf-8') as f:
