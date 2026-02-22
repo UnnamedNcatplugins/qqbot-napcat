@@ -2,7 +2,7 @@ from pathlib import Path
 from ncatbot.core import BotClient
 from ncatbot.plugin_system import on_group_poke, on_group_at, admin_filter, on_message
 from ncatbot.core.event import PokeNoticeEvent, GroupMessageEvent, BaseMessageEvent, PrivateMessageEvent
-from ncatbot.core.event.message_segment.message_segment import PlainText, Forward
+from ncatbot.core.event.message_segment.message_segment import PlainText, Forward, Node, Reply
 from ncatbot.utils import status, get_log, ncatbot_config
 from ncatbot.utils.error import NcatBotConnectionError
 import ncatbot
@@ -80,7 +80,16 @@ async def export_msgs(event: BaseMessageEvent):
     for node in forward_content:
         if node.msg_seg_type != 'node':
             continue
-        node_str = node.get_summary() + '\n'
+        assert isinstance(node, Node)
+        cited_content: str | None = None
+        for msg_seg in node.content:
+            if msg_seg.msg_seg_type == 'reply':
+                logger.debug(f'检测到引用消息')
+                assert isinstance(msg_seg, Reply)
+                cited_msg = await status.global_api.get_msg(msg_seg.id)
+                cited_content = cited_msg.raw_message
+        node_str = None if cited_content is None else f'[引用: {cited_content}]'
+        node_str += node.get_summary() + '\n'
         sum_str += node_str
     with open(f'{forward_msg.id}.txt', 'w', encoding='utf-8') as f:
         f.write(sum_str)
