@@ -16,11 +16,15 @@ def always_true(x=True):
     return True
 
 
+def always_false(x=False):
+    return False
+
+
 # 用户有义务自行确保密码强度
 ncatbot.utils.config.strong_password_check = always_true
 # hook以确保远端模式正常运行
 if ncatbot_config.napcat.remote_mode:
-    ncatbot.utils.config.is_napcat_local = always_true
+    ncatbot.utils.config.is_napcat_local = always_false
 
 
 @on_group_poke
