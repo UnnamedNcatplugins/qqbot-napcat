@@ -11,11 +11,16 @@ bot = BotClient()
 WHAT_JPG = Path('what.jpg')
 logger = get_log('Main')
 
+
+def always_true(x=True):
+    return True
+
+
 # 用户有义务自行确保密码强度
-ncatbot.utils.config.strong_password_check = lambda x: True
+ncatbot.utils.config.strong_password_check = always_true
 # hook以确保远端模式正常运行
 if ncatbot_config.napcat.remote_mode:
-    ncatbot.utils.config.is_napcat_local = lambda x: False
+    ncatbot.utils.config.is_napcat_local = always_true
 
 
 @on_group_poke
