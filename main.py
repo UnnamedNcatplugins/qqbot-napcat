@@ -12,19 +12,11 @@ WHAT_JPG = Path('what.jpg')
 logger = get_log('Main')
 
 
-def always_true(x=True):
-    return True
-
-
-def always_false(x=False):
-    return False
-
-
 # 用户有义务自行确保密码强度
-ncatbot_config.napcat._security_check = always_true
+ncatbot_config.napcat._security_check = lambda: True
 # hook以确保远端模式正常运行
 if ncatbot_config.napcat.remote_mode:
-    ncatbot.utils.config.is_napcat_local = always_false
+    ncatbot.utils.config.is_napcat_local = lambda: False
 
 
 @on_group_poke
